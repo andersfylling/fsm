@@ -270,6 +270,20 @@ func (f *FSM) SetMetadata(key string, dataValue interface{}) {
 	f.metadata[key] = dataValue
 }
 
+func (f *FSM) constructEvent(event string, args ...interface{}) (*Event, error) {
+	dst, ok := f.transitions[eKey{event, f.current}]
+	if !ok {
+		for ekey := range f.transitions {
+			if ekey.event == event {
+				return nil, InvalidEventError{event, f.current}
+			}
+		}
+		return nil, UnknownEventError{event}
+	}
+
+	return &Event{f, event, f.current, dst, nil, args, false, false}, nil
+}
+
 // Event initiates a state transition with the named event.
 //
 // The call takes a variable number of arguments that will be passed to the
@@ -298,24 +312,16 @@ func (f *FSM) Event(event string, args ...interface{}) error {
 		return InTransitionError{event}
 	}
 
-	dst, ok := f.transitions[eKey{event, f.current}]
-	if !ok {
-		for ekey := range f.transitions {
-			if ekey.event == event {
-				return InvalidEventError{event, f.current}
-			}
-		}
-		return UnknownEventError{event}
-	}
-
-	e := &Event{f, event, f.current, dst, nil, args, false, false}
-
-	err := f.beforeEventCallbacks(e)
+	e, err := f.constructEvent(event, args...)
 	if err != nil {
 		return err
 	}
 
-	if f.current == dst {
+	if err = f.beforeEventCallbacks(e); err != nil {
+		return err
+	}
+
+	if f.current == e.Dst {
 		f.afterEventCallbacks(e)
 		return NoTransitionError{e.Err}
 	}
@@ -323,7 +329,7 @@ func (f *FSM) Event(event string, args ...interface{}) error {
 	// Setup the transition, call it later.
 	f.transition = func() {
 		f.stateMu.Lock()
-		f.current = dst
+		f.current = e.Dst
 		f.stateMu.Unlock()
 
 		f.enterStateCallbacks(e)
